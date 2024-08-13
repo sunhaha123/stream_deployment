@@ -1,0 +1,13 @@
+LICENSE
+README.md
+setup.py
+service_streamer/__init__.py
+service_streamer/managed_model.py
+service_streamer/service_streamer.py
+service_streamer.egg-info/PKG-INFO
+service_streamer.egg-info/SOURCES.txt
+service_streamer.egg-info/dependency_links.txt
+service_streamer.egg-info/not-zip-safe
+service_streamer.egg-info/requires.txt
+service_streamer.egg-info/top_level.txt
+tests/test_service_streamer.py

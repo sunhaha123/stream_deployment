@@ -1,0 +1,28 @@
+include:
+  - project: "ai/anunaki"
+    file: "app.base.yaml"
+    ref: master
+
+variables:
+  LANG: python
+  KIND: service
+  PV: enable
+  
+
+
+# for debugging
+deploy-removebg:
+  extends: deploy
+  variables:
+    RELEASE: removebg
+    CUSTOM_READINESS_PATH: status
+    CUSTOM_NAMESPACE: "ai"
+    MEM_REQUEST: "12Gi"
+    MEM_LIMIT: "12Gi"
+    CPU_REQUEST: "3"
+    CPU_LIMIT: "6"
+    REPLICA: 2
+    GPU_ENABLE: "true"
+    NVIDIA_NAME: RTX-4070-Ti-S
+    HELM_COMMAND: "command[0]=sh,command[1]=/opt/removebg_deployment/start_server_remote.sh"
+

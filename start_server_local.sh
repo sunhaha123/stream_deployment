@@ -1,0 +1,1 @@
+cd main && /home/echo/miniconda3/envs/removebg_dep/bin/python api.py
