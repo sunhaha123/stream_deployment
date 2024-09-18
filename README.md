@@ -9,7 +9,7 @@ run on local: sh start_server_local.sh
 
 testing the server: sh test_one.sh
 
-Stress Testing local: cd tests && locust -f locustfile.py --host=https://internal-ems.echo.tech/removebg
-Stress Testing remote: cd tests && locust -f locustfile.py --host=http://192.168.12.68:8080
+
+Stress Testing local: cd tests && locust -f locustfile.py --host=http://192.168.12.68:8080
 
 curl http://127.0.0.1:8080/status
