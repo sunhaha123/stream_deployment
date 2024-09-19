@@ -3,7 +3,6 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 import numpy as np
 import torch
-from transparent_background import Remover
 import io
 from concurrent.futures import ThreadPoolExecutor
 from itertools import cycle
@@ -16,29 +15,42 @@ import uvicorn
 from contextlib import asynccontextmanager
 import logging
 from logging.handlers import RotatingFileHandler
+from mmedit.apis import init_model, restoration_inference
+from pydantic import BaseModel
 
-
-from service_streamer.service_streamer import ManagedModel
-from remove_background.remover import Remover
-from service_streamer.service_streamer import Streamer
 
 app = FastAPI()
 model = None
 streamer = None
 
-class ManagedRemovetModel(ManagedModel):
-   
-    def init_model(self):
-        self.model = Remover()
+LOG_FMT = '[%(levelname)s] %(asctime)s: %(message)s'
+LOG_DATE_FMT = '%Y-%m-%d %H:%M:%S'
 
-    def predict(self, img):
-        return self.model.process_batch(img, type='rgba')
+formatter = logging.Formatter(fmt=LOG_FMT, datefmt=LOG_DATE_FMT)
+if not os.path.exists('/opt/web/fastapi/log'):
+    os.makedirs('/opt/web/fastapi/log')
+rotatingHandler = RotatingFileHandler('/opt/web/fastapi/log/active.log', maxBytes=10000, backupCount=5)
+rotatingHandler.setLevel(logging.INFO)
+rotatingHandler.setFormatter(formatter)
+
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+console.setFormatter(formatter)
+
+logging.basicConfig(format=LOG_FMT, datefmt=LOG_DATE_FMT, level=logging.INFO, handlers=[rotatingHandler, console])
+
+
+class RewardScoreRequest(BaseModel): 
+    img_path: str
+    # prompt: str
 
 
 @app.on_event("startup")
 async def startup_event():
-    global streamer
-    streamer = Streamer(ManagedRemovetModel, batch_size=1, max_latency=0.01, worker_num=1, cuda_devices=(0,))
+    global model
+    config = './main/configs/clipiqa_attribute_test.py'
+    model = init_model(
+        config, None, device=torch.device('cuda'))
 # @asynccontextmanager
 # async def lifespan(app: FastAPI):
 #     global streamer
@@ -47,22 +59,7 @@ async def startup_event():
 #     yield
 #     # 清理资源
 #     streamer = None
-def setup_logging():
-    LOG_FMT = '[%(levelname)s] %(asctime)s: %(message)s'
-    LOG_DATE_FMT = '%Y-%m-%d %H:%M:%S'
-    
-    formatter = logging.Formatter(fmt=LOG_FMT, datefmt=LOG_DATE_FMT)
-    if not os.path.exists('/opt/web/fastapi/log'):
-        os.makedirs('/opt/web/fastapi/log')
-    rotatingHandler = RotatingFileHandler('/opt/web/fastapi/log/active.log', maxBytes=10000, backupCount=5)
-    rotatingHandler.setLevel(logging.INFO)
-    rotatingHandler.setFormatter(formatter)
 
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    console.setFormatter(formatter)
-
-    logging.basicConfig(format=LOG_FMT, datefmt=LOG_DATE_FMT, level=logging.INFO, handlers=[rotatingHandler, console])
 
 
 def open_image_with_opencv(contents: bytes):
@@ -75,39 +72,35 @@ def open_image_with_opencv(contents: bytes):
     return Image.fromarray(image_rgb)
 
 
-@app.post("/remove-background")
-async def remove_background(file: UploadFile = File(...)):
-    start_time = time.perf_counter()
+@app.post("/compute-score")
+async def compute_image_reward(request: RewardScoreRequest):
+    img_path = request.img_path
+    # prompt = request.prompt
+    logging.info(f"Received request with img_path: {img_path} !")
+    try:
+        # 验证图像文件是否存在
+        if not os.path.exists(img_path):
+            return {"error": f"Image path '{img_path}' does not exist."}
 
-    # 读取上传的图像文件
-    t0 = time.time()
-    contents = await file.read()
-    logging.info("read wasted %5f"%(time.time()-t0))
+        # 开始计时
+        start_time = time.perf_counter()
 
-    t0 = time.time()
-    img = open_image_with_opencv(contents)        
-    logging.info("open wasted %5f"%(time.time()-t0))
+        output, attributes = restoration_inference(model, img_path, return_attributes=True)
+        output = output.float().detach().cpu().numpy()
+        attributes = attributes.float().detach().cpu().numpy()[0]
+       
+        print(attributes)
 
-    t0 = time.time()
-    mid = streamer.predict([img])[0]
-    logging.info("steamer wasted %5f"%(time.time()-t0))
+        # 记录模型处理时间
+        end_time = time.perf_counter()
+        logging.info(f"Total processing time: {end_time - start_time:.6f} seconds")
 
-    t0 = time.time()    
-    mid_array = np.array(mid)    
-    if mid_array.shape[2] == 4:  # 检查是否为 RGBA
-        mid_array = cv2.cvtColor(mid_array, cv2.COLOR_RGBA2BGRA)
-    elif mid_array.shape[2] == 3:  # 如果是 RGB
-        mid_array = cv2.cvtColor(mid_array, cv2.COLOR_RGB2BGR)
-    # 使用 OpenCV 将图像编码为 PNG 格式
-    _, buffer = cv2.imencode('.png', mid_array, [cv2.IMWRITE_PNG_COMPRESSION, 1])
-    # 将编码后的图像数据转换为字节数组
-    img_byte_arr = io.BytesIO(buffer)    
-    logging.info("save wasted %5f"%(time.time()-t0))
+        # 返回模型的评分结果
+        return {"score": str(attributes[0])}
 
-    end_time = time.perf_counter()
-    logging.info(f"Total processing time: {end_time - start_time:.6f} seconds")
-    # 返回流响应
-    return StreamingResponse(img_byte_arr, media_type="image/png", headers={"Content-Disposition": "inline; filename=remove.png"})
+    except Exception as e:
+        logging.error(f"Error while processing image: {e}")
+        return {"error": str(e)}
 
 
 @app.get("/status")
@@ -116,4 +109,5 @@ async def status():
 
 
 if __name__ == "__main__":
-      uvicorn.run('api:app', host='0.0.0.0', port=8080, reload=False, workers=3)
+      uvicorn.run('api:app', host='0.0.0.0', port=8080, reload=False, workers=1)
+      
